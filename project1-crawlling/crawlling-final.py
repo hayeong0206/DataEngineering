@@ -129,7 +129,8 @@ def crawl_sample_hotel(link):
 
     print(f"📍 주소: {hotel_info['address']}")
     print(f"📍 위치: {hotel_info['latitude']}, {hotel_info['longitude']}")
-    print(f"⭐ 평균 평점: {hotel_info['avg_rating']}")
+    print(f"⭐ 평점: {hotel_info['avg_rating']}")
+    print(f"⭐ 리뷰 개수: {hotel_info['review_count']}")
 
     reviews_list = []
     page = 1
