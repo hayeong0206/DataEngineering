@@ -30,7 +30,7 @@ driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), opti
 wait = WebDriverWait(driver, 10)
 
 # ✅ 기존에 저장된 호텔 링크 불러오기 (중단 지점부터 시작 가능하도록)
-visited_links_file = "../project1/visited_hotel_links.json"
+visited_links_file = "visited_hotel_links.json"
 if os.path.exists(visited_links_file):
     with open(visited_links_file, "r", encoding="utf-8") as f:
         visited_links = set(json.load(f))
@@ -116,6 +116,17 @@ def crawl_sample_hotel(link):
     except:
         hotel_info["avg_rating"] = None
 
+    # ✅ 실제 리뷰 수 텍스트에서 숫자만 추출하여 저장
+    try:
+        review_text = driver.find_element(By.CSS_SELECTOR,
+                                          'p.Typographystyled__TypographyStyled-sc-j18mtu-0.Hkrzy.kite-js-Typography').text
+        match = re.search(r'(\d+)', review_text)
+        review_count_from_text = int(match.group(1)) if match else 0
+    except:
+        review_count_from_text = 0
+
+    hotel_info["review_count"] = review_count_from_text
+
     print(f"📍 주소: {hotel_info['address']}")
     print(f"📍 위치: {hotel_info['latitude']}, {hotel_info['longitude']}")
     print(f"⭐ 평균 평점: {hotel_info['avg_rating']}")
@@ -197,7 +208,6 @@ def crawl_sample_hotel(link):
             break
 
     # ✅ 리뷰 최대 갯수 수집 후 저장
-    hotel_info["review_count"] = len(reviews_list)
     hotel_info["reviews"] = reviews_list
     all_hotels.append(hotel_info)
     collection.insert_one(hotel_info)
@@ -206,8 +216,6 @@ def crawl_sample_hotel(link):
         json.dump(list(visited_links), f, ensure_ascii=False, indent=2)
     print(f"✅ MongoDB 및 visited_links 저장 완료: {hotel_name} (리뷰 {len(reviews_list)}건)")
 
-    hotel_info["review_count"] = len(reviews_list)
-    hotel_info["reviews"] = reviews_list
     return hotel_info
 
 
