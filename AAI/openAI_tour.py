@@ -26,6 +26,7 @@ base_prompt = """
 - 의미가 모호하거나 추상적인 단어는 제외합니다.
 - 감성은 '긍정', '부정', '중립' 중 하나로 판단합니다.
 - 중요도 순으로 정렬해주세요.
+- 외국어 리뷰에 경우에도 한국어 키워드를 추출해주세요.
 
 출력 형식:
 [카테고리명]
@@ -39,7 +40,7 @@ base_prompt = """
 def analyze_review_with_gpt(content):
     try:
         response = openai.chat.completions.create(
-            model="gpt-4",
+            model="gpt-4o",
             messages=[
                 {"role": "system", "content": "너는 리뷰에서 키워드, 감성, 카테고리를 추출하는 분석 도우미야."},
                 {"role": "user", "content": base_prompt + "\n\n" + content}
