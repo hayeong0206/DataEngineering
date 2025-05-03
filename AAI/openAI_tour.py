@@ -1,48 +1,34 @@
 import openai
-from pymongo import MongoClient
+import random
+import json
 import re
-
-# ✅ OpenAI API Key
-openai.api_key = 'your-api-key'
+from pymongo import MongoClient
+from bson import ObjectId
+from tqdm import tqdm  # ✅ 진행률 표시용 라이브러리
 
 # ✅ MongoDB 연결
-mongo_uri = "mongodb+srv://dataEngineering:0000@cluster0.naylo.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
-client = MongoClient(mongo_uri)
+client = MongoClient("mongodb+srv://dataEngineering:0000@cluster0.naylo.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0")
 db = client["dataEngineering"]
-collection = db["GoogleMap_jeju"]  # 관광지용 컬렉션 이름
+collection = db["Agoda_jeju"]  # 예시: 호텔
 
-# ✅ 프롬프트
+# ✅ OpenAI 설정
+openai.api_key = "your_api_key"
+
+# ✅ base prompt
 base_prompt = """
-입력된 텍스트는 관광지에 대한 리뷰입니다.
-주어진 리뷰 텍스트에서 주요한 키워드들을 최대 10개까지 추출하여 정리하세요.
-각 키워드에 대해 다음 세 가지 정보를 추출해주세요:
-
-1. 카테고리명 (예: 장소, 경관, 접근성, 편의시설, 가격 등)
-2. 키워드 (명사, 하나의 단어로 구성)
-3. 감성 (긍정 / 부정 / 중립)
-
-요구사항:
-- 키워드는 하나의 명사 단어로 구성되어야 합니다.
-- 의미가 모호하거나 추상적인 단어는 제외합니다.
-- 감성은 '긍정', '부정', '중립' 중 하나로 판단합니다.
-- 중요도 순으로 정렬해주세요.
-- 외국어 리뷰에 경우에도 한국어 키워드를 추출해주세요.
-
+다음은 관광지 리뷰입니다. 리뷰에서 10개 미만의 핵심 키워드를 뽑고, 카테고리와 감성(긍정/부정/중립)을 정리해주세요. 외국어의 경우 한국어로 번역해주세요.
 출력 형식:
-[카테고리명]
-키워드1 - 감성
-키워드2 - 감성
-
-출력 형식에 번호는 필요 없습니다.
+[카테고리]
+키워드 - 감성
 """
 
-# ✅ GPT 분석 함수
+# ✅ GPT 호출 함수
 def analyze_review_with_gpt(content):
     try:
         response = openai.chat.completions.create(
             model="gpt-4o",
             messages=[
-                {"role": "system", "content": "너는 리뷰에서 키워드, 감성, 카테고리를 추출하는 분석 도우미야."},
+                {"role": "system", "content": "리뷰 키워드 감성 분석 도우미"},
                 {"role": "user", "content": base_prompt + "\n\n" + content}
             ],
             temperature=0.2
@@ -52,19 +38,18 @@ def analyze_review_with_gpt(content):
         print("❌ GPT 오류:", e)
         return None
 
-# ✅ 분석 결과 파싱 함수
+# ✅ 응답 파싱 함수
 def parse_analysis_result(text):
     result = []
     current_category = None
     for line in text.strip().split("\n"):
-        cat_match = re.match(r"\[(.+?)\]", line)
-        if cat_match:
-            current_category = cat_match.group(1).strip()
+        if "[" in line and "]" in line:
+            current_category = line.strip("[]")
         elif "-" in line and current_category:
             try:
-                keyword, sentiment = line.strip().split(" - ")
+                keyword, sentiment = line.split(" - ")
                 result.append({
-                    "category": current_category,
+                    "category": current_category.strip(),
                     "keyword": keyword.strip(),
                     "sentiment": sentiment.strip()
                 })
@@ -72,33 +57,62 @@ def parse_analysis_result(text):
                 continue
     return result
 
-# ✅ 관광지 리뷰 단위 분석 및 저장
-for doc in collection.find():
-    doc_id = doc["_id"]
-    reviews = doc.get("reviews", [])
+# ✅ STEP 1: 유효한 리뷰만 수집 (20자 이상, 미분석)
+sample_file = "sampled_reviews.json"
 
-    for idx, review in enumerate(reviews):
-        if "keywords_analysis" in review:
-            continue
+try:
+    with open(sample_file, "r", encoding="utf-8") as f:
+        sampled_reviews = json.load(f)
+    print(f"📂 기존 샘플 파일 불러오기 완료: {len(sampled_reviews)}개")
 
-        content = review.get("content")
-        if not isinstance(content, str) or not content.strip():
-            continue
-        content = content.strip()
+except FileNotFoundError:
+    print("📤 샘플 파일이 없어 새로 샘플링합니다...")
+    all_review_targets = []
+    for doc in collection.find():
+        for idx, review in enumerate(doc.get("reviews", [])):
+            content = review.get("content")
+            already_done = "keywords_analysis" in review
 
-        print(f"\n🔍 [문서 ID: {doc_id}] 리뷰 {idx+1}: {content[:60]}...")
+            if not already_done and isinstance(content, str) and len(content.strip()) >= 20:
+                all_review_targets.append({
+                    "_id": str(doc["_id"]),
+                    "review_index": idx,
+                    "content": content.strip()
+                })
 
-        gpt_result = analyze_review_with_gpt(content)
-        if gpt_result:
-            parsed = parse_analysis_result(gpt_result)
+    total = len(all_review_targets)
+    sample_size = int(total * 0.15)
+    sampled_reviews = random.sample(all_review_targets, sample_size)
 
-            # ✅ 해당 리뷰에 분석 결과 저장
-            collection.update_one(
-                {"_id": doc_id},
-                {f"$set": {f"reviews.{idx}.keywords_analysis": parsed}}
-            )
+    with open(sample_file, "w", encoding="utf-8") as f:
+        json.dump(sampled_reviews, f, ensure_ascii=False, indent=2)
+    print(f"✅ {sample_size}개의 리뷰를 샘플링하고 파일로 저장했습니다.")
 
-            print("📌 키워드 분석 결과:")
-            for item in parsed:
-                print(f"  ▸ [{item['category']}] {item['keyword']} - {item['sentiment']}")
-            print(f"✅ 리뷰 {idx+1} 저장 완료")
+# ✅ STEP 2: GPT 분석 및 DB 저장
+for review_info in tqdm(sampled_reviews, desc="리뷰 분석 진행중"):
+    _id = review_info["_id"]
+    idx = review_info["review_index"]
+    content = review_info["content"]
+
+    # 이미 분석된 경우 스킵
+    doc = collection.find_one({"_id": ObjectId(_id)})
+    if doc and "keywords_analysis" in doc["reviews"][idx]:
+        continue
+
+    print(f"\n📝 리뷰 분석 중: {content[:60]}...")
+
+    gpt_output = analyze_review_with_gpt(content)
+    if gpt_output:
+        parsed_result = parse_analysis_result(gpt_output)
+
+        # 콘솔에 분석 결과 출력
+        print("🔍 분석 결과:")
+        for item in parsed_result:
+            print(f" - [{item['category']}] {item['keyword']} ({item['sentiment']})")
+
+        # DB에 저장
+        collection.update_one(
+            {"_id": ObjectId(_id)},
+            {"$set": {f"reviews.{idx}.keywords_analysis": parsed_result}}
+        )
+        print(f"✅ 저장 완료 (index {idx})")
